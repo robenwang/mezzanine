@@ -9,7 +9,12 @@ from django.contrib import messages
 
 from mezzanine.pages.models import Page, PageMoveException
 from mezzanine.utils.urls import home_slug
-from mezzanine.utils.views import render
+from mezzanine.utils.views import render,paginate
+
+from mezzanine.conf import settings
+
+
+from mezzanine.blog.models import BlogPost,BlogCategory
 
 
 @staff_member_required
@@ -45,6 +50,42 @@ def admin_page_ordering(request):
         Page.objects.filter(id=get_id(page_id)).update(_order=i)
 
     return HttpResponse("ok")
+
+def getposts(request, tag=None, year=None, month=None, username=None,
+                   category=None, template="blog/blog_post_list.html",
+                   extra_context=None):
+    
+    blog_posts = BlogPost.objects.published(for_user=request.user)
+    if tag is not None:
+        tag = get_object_or_404(Keyword, slug=tag)
+        blog_posts = blog_posts.filter(keywords__keyword=tag)
+    if year is not None:
+        blog_posts = blog_posts.filter(publish_date__year=year)
+        if month is not None:
+            blog_posts = blog_posts.filter(publish_date__month=month)
+            try:
+                month = month_name[int(month)]
+            except IndexError:
+                raise Http404()
+    if category is not None:
+        category = get_object_or_404(BlogCategory, slug=category)
+        blog_posts = blog_posts.filter(categories=category)
+
+    author = None
+    if username is not None:
+        author = get_object_or_404(User, username=username)
+        blog_posts = blog_posts.filter(user=author)
+
+    prefetch = ("categories", "keywords__keyword")
+    blog_posts = blog_posts.select_related("user").prefetch_related(*prefetch)
+    blog_posts = paginate(blog_posts, request.GET.get("page", 1),
+                          settings.BLOG_POST_PER_PAGE,
+                          settings.MAX_PAGING_LINKS)
+    context = {"blog_posts": blog_posts, "year": year, "month": month,
+               "tag": tag, "category": category, "author": author}
+    context.update(extra_context or {})
+    
+    return blog_posts    
 
 
 def page(request, slug, template=u"pages/page.html", extra_context=None):
@@ -96,4 +137,18 @@ def page(request, slug, template=u"pages/page.html", extra_context=None):
     if request.page.content_model is not None:
         templates.append(u"pages/%s.html" % request.page.content_model)
     templates.append(template)
+    
+    #added by RobinWang
+    ss=slug.split('/')
+    if len(ss)==1:
+        categorys=BlogCategory.objects.all()
+        categoryslug=''
+        for c in categorys:
+            if c.slug==ss[0]:
+                categoryslug=ss[0]
+                break
+        if categoryslug!='':
+            blogs=getposts(request,category=categoryslug)
+            extra_context['blog_posts']=blogs
+
     return render(request, templates, extra_context or {})
